@@ -8,7 +8,7 @@ import '../models/transaction.dart' as model;
 class DAO {
   static Database? _database;
 
-  // ─── Get or create database ───────────────────────────────────────────────
+  // Get or create database 
   static Future<Database> get database async {
     if (_database != null) return _database!;
     _database = await _initDB();
@@ -57,7 +57,7 @@ class DAO {
     ''');
   }
 
-  // ─── Book Operations ───────────────────────────────────────────────────────
+  // Book Operations
 
   static Future<void> insertBook(Book book) async {
     final db = await database;
@@ -100,7 +100,7 @@ class DAO {
     );
   }
 
-  // ─── Transaction Operations ────────────────────────────────────────────────
+  // Transaction Operations 
 
   static Future<void> insertTransaction(model.Transaction transaction) async {
     final db = await database;
