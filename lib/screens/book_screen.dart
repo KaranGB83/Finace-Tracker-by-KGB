@@ -36,113 +36,143 @@ class _BookScreenState extends State<BookScreen> {
     });
   }
 
-  // Transaction Dialog (shared for credit & debit)
-  void _showTransactionDialog(bool isCredit) {
-    final amountController = TextEditingController();
-    final noteController = TextEditingController();
-    final descriptionController = TextEditingController();
+  // Add / Edit dialog. Pass [existing] to edit a transaction.
+  void _showTransactionDialog(bool initialIsCredit, {model.Transaction? existing}) {
+    final editing = existing != null;
+    final amountController = TextEditingController(
+        text: editing ? existing!.amount.toString() : '');
+    final noteController = TextEditingController(text: existing?.note ?? '');
+    final descriptionController =
+        TextEditingController(text: existing?.description ?? '');
     final formKey = GlobalKey<FormState>();
+    var isCredit = editing ? existing!.isCredit : initialIsCredit;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(
-              isCredit ? Icons.arrow_downward : Icons.arrow_upward,
-              color: isCredit ? Colors.green : Colors.red,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(
+                isCredit ? Icons.arrow_downward : Icons.arrow_upward,
+                color: isCredit ? Colors.green : Colors.red,
+              ),
+              const SizedBox(width: 8),
+              Text(editing
+                  ? 'Edit Transaction'
+                  : (isCredit ? 'Add Credit' : 'Add Debit')),
+            ],
+          ),
+          content: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (editing) ...[
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(value: true, label: Text('Credit')),
+                        ButtonSegment(value: false, label: Text('Debit')),
+                      ],
+                      selected: {isCredit},
+                      onSelectionChanged: (v) =>
+                          setDialogState(() => isCredit = v.first),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  // Amount
+                  TextFormField(
+                    controller: amountController,
+                    decoration: const InputDecoration(
+                      labelText: 'Amount',
+                      hintText: '0.00',
+                      border: OutlineInputBorder(),
+                      prefixText: '₹ ',
+                    ),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    autofocus: true,
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Amount is required';
+                      }
+                      final parsed = double.tryParse(value.trim());
+                      if (parsed == null || !parsed.isFinite) {
+                        return 'Enter a valid number';
+                      }
+                      if (parsed <= 0) return 'Amount must be greater than 0';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  // Note (title)
+                  TextFormField(
+                    controller: noteController,
+                    decoration: const InputDecoration(
+                      labelText: 'Note',
+                      hintText: 'e.g. Salary, Groceries',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Note is required'
+                        : null,
+                  ),
+                  const SizedBox(height: 16),
+                  // Description
+                  TextFormField(
+                    controller: descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: 'Description',
+                      hintText: 'Optional details',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 8),
-            Text(isCredit ? 'Add Credit' : 'Add Debit'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: isCredit ? Colors.green : Colors.red,
+              ),
+              onPressed: () async {
+                if (!formKey.currentState!.validate()) return;
+
+                final amount = double.parse(amountController.text.trim());
+                final transaction = model.Transaction(
+                  id: existing?.id ?? _uuid.v4(),
+                  bookId: _book.id,
+                  note: noteController.text.trim(),
+                  description: descriptionController.text.trim(),
+                  amount: amount,
+                  isCredit: isCredit,
+                  // keep the original date/time when editing
+                  createdAt: existing?.createdAt ?? DateTime.now(),
+                );
+
+                // Saves the transaction and updates the balance atomically
+                final newBalance = editing
+                    ? await DAO.updateTransaction(existing!, transaction)
+                    : await DAO.insertTransaction(transaction);
+
+                if (context.mounted) Navigator.pop(context);
+                if (!mounted) return;
+                setState(() => _book.balance = newBalance);
+                _loadTransactions();
+              },
+              child: Text(editing
+                  ? 'Save'
+                  : (isCredit ? 'Add Credit' : 'Add Debit')),
+            ),
           ],
         ),
-        content: Form(
-          key: formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Amount
-                TextFormField(
-                  controller: amountController,
-                  decoration: const InputDecoration(
-                    labelText: 'Amount',
-                    hintText: '0.00',
-                    border: OutlineInputBorder(),
-                    prefixText: '₹ ',
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  autofocus: true,
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) return 'Amount is required';
-                    final parsed = double.tryParse(value.trim());
-                    if (parsed == null || !parsed.isFinite) return 'Enter a valid number';
-                    if (parsed <= 0) return 'Amount must be greater than 0';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                // Note (title)
-                TextFormField(
-                  controller: noteController,
-                  decoration: const InputDecoration(
-                    labelText: 'Note',
-                    hintText: 'e.g. Salary, Groceries',
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) =>
-                      value == null || value.trim().isEmpty ? 'Note is required' : null,
-                ),
-                const SizedBox(height: 16),
-                // Description
-                TextFormField(
-                  controller: descriptionController,
-                  decoration: const InputDecoration(
-                    labelText: 'Description',
-                    hintText: 'Optional details',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLines: 2,
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: isCredit ? Colors.green : Colors.red,
-            ),
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-
-              final amount = double.parse(amountController.text.trim());
-
-              final transaction = model.Transaction(
-                id: _uuid.v4(),
-                bookId: _book.id,
-                note: noteController.text.trim(),
-                description: descriptionController.text.trim(),
-                amount: amount,
-                isCredit: isCredit,
-                createdAt: DateTime.now(),
-              );
-
-              // Saves the transaction and updates the balance atomically
-              final newBalance = await DAO.insertTransaction(transaction);
-
-              if (context.mounted) Navigator.pop(context);
-              if (!mounted) return;
-              setState(() => _book.balance = newBalance);
-              _loadTransactions();
-            },
-            child: Text(isCredit ? 'Add Credit' : 'Add Debit'),
-          ),
-        ],
       ),
     );
   }
@@ -186,6 +216,7 @@ class _BookScreenState extends State<BookScreen> {
     final dateStr = DateFormat('dd MMM yyyy, hh:mm a').format(transaction.createdAt);
 
     return GestureDetector(
+      onTap: () => _showTransactionDialog(transaction.isCredit, existing: transaction),
       onLongPress: () => _confirmDeleteTransaction(transaction),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -352,6 +383,15 @@ class _BookScreenState extends State<BookScreen> {
                   style: const TextStyle(color: Colors.grey),
                 ),
               ],
+            ),
+          ),
+
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 2, 16, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Tap to edit · Long-press to delete',
+                  style: TextStyle(color: Colors.grey, fontSize: 12)),
             ),
           ),
 

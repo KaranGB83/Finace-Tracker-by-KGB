@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/book.dart';
@@ -115,6 +116,35 @@ class DAO {
     });
   }
 
+  /// Edits a transaction and fixes the book balance in one atomic step:
+  /// the old effect is reversed, the new one applied. Returns the new balance.
+  static Future<double> updateTransaction(
+      model.Transaction old, model.Transaction updated) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final oldSigned = old.isCredit ? old.amount : -old.amount;
+      final newSigned = updated.isCredit ? updated.amount : -updated.amount;
+      await txn.update(
+        'transactions',
+        {
+          'note': updated.note,
+          'description': updated.description,
+          'amount': updated.amount,
+          'isCredit': updated.isCredit ? 1 : 0,
+        },
+        where: 'id = ?',
+        whereArgs: [old.id],
+      );
+      await txn.rawUpdate(
+        'UPDATE books SET balance = balance + ? WHERE id = ?',
+        [newSigned - oldSigned, old.bookId],
+      );
+      final rows = await txn.query('books',
+          columns: ['balance'], where: 'id = ?', whereArgs: [old.bookId]);
+      return (rows.first['balance'] as num).toDouble();
+    });
+  }
+
   static Future<List<model.Transaction>> getTransactionsForBook(String bookId) async {
     final db = await database;
     final maps = await db.query(
@@ -143,5 +173,44 @@ class DAO {
           columns: ['balance'], where: 'id = ?', whereArgs: [bookId]);
       return rows.isEmpty ? null : (rows.first['balance'] as num).toDouble();
     });
+  }
+
+  // Backup / Restore
+
+  /// Everything in the database as one JSON string.
+  static Future<String> exportJson() async {
+    final db = await database;
+    final books = await db.query('books');
+    final txs = await db.query('transactions');
+    return const JsonEncoder.withIndent('  ').convert({
+      'app': 'finance_tracker',
+      'version': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'books': books,
+      'transactions': txs,
+    });
+  }
+
+  /// Merges a backup into the database (same id = overwritten, nothing is
+  /// deleted), all-or-nothing. Returns "books, transactions" counts.
+  static Future<({int books, int transactions})> importJson(String text) async {
+    final decoded = jsonDecode(text);
+    if (decoded is! Map || decoded['app'] != 'finance_tracker') {
+      throw const FormatException('This is not a Finance Tracker backup');
+    }
+    final books = (decoded['books'] as List).cast<Map<String, dynamic>>();
+    final txs = (decoded['transactions'] as List).cast<Map<String, dynamic>>();
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final b in books) {
+        await txn.insert('books', Book.fromMap(b).toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final t in txs) {
+        await txn.insert('transactions', model.Transaction.fromMap(t).toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+    return (books: books.length, transactions: txs.length);
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 import '../models/book.dart';
 import '../database/dao.dart';
@@ -157,8 +158,6 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       onLongPress: () => _confirmDeleteBook(book),
       child: Container(
-        width: 200,
-        margin: const EdgeInsets.only(right: 16),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: isNegative
@@ -176,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -190,7 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     book.title,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
                     overflow: TextOverflow.ellipsis,
@@ -214,9 +213,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 const Text('Balance', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 Text(
                   '₹ ${book.balance.toStringAsFixed(2)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 22,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -224,6 +225,56 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Backup / Restore (no extra packages: uses the clipboard)
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _backup() async {
+    final json = await DAO.exportJson();
+    await Clipboard.setData(ClipboardData(text: json));
+    _snack('Backup copied. Paste it into Notes, WhatsApp or email to keep it safe.');
+  }
+
+  void _showRestoreDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Restore backup'),
+        content: TextField(
+          controller: controller,
+          maxLines: 6,
+          decoration: const InputDecoration(
+            hintText: 'Paste your backup here',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              try {
+                final r = await DAO.importJson(controller.text.trim());
+                if (context.mounted) Navigator.pop(context);
+                _snack('Restored ${r.books} book(s), ${r.transactions} transaction(s).');
+                _loadBooks();
+              } catch (e) {
+                _snack('Could not restore: not a valid Finance Tracker backup.');
+              }
+            },
+            child: const Text('Restore'),
+          ),
+        ],
       ),
     );
   }
@@ -237,6 +288,16 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.indigo,
         title: const Text('Finance Tracker', style: TextStyle(color: Colors.white)),
         elevation: 0,
+        actions: [
+          PopupMenuButton<String>(
+            iconColor: Colors.white,
+            onSelected: (v) => v == 'backup' ? _backup() : _showRestoreDialog(),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'backup', child: Text('Backup (copy to clipboard)')),
+              PopupMenuItem(value: 'restore', child: Text('Restore (paste backup)')),
+            ],
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -254,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 )
               : Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -263,10 +324,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 16),
-                      SizedBox(
-                        height: 200,
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
+                      Expanded(
+                        child: GridView.builder(
+                          // extra bottom space so the + button never covers a card
+                          padding: const EdgeInsets.only(bottom: 88),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                            childAspectRatio: 0.95,
+                          ),
                           itemCount: _books.length,
                           itemBuilder: (_, index) => _buildBookCard(_books[index]),
                         ),
